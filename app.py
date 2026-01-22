@@ -64,7 +64,7 @@ def verify_password(password: str, hashed: str) -> bool:
     """Verify a password against its hash."""
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def send_email_notification(employee_name: str, start_date: str, end_date: str, reason: str) -> bool:
+def send_email_notification(employee_name: str, start_date: str, end_date: str, reason: str, days_taken: int, unbillable_days: int = 0) -> bool:
     """
     Send email notification to multiple admins when a new vacation request is submitted.
     """
@@ -94,6 +94,8 @@ def send_email_notification(employee_name: str, start_date: str, end_date: str, 
                         <p><strong>Employee:</strong> {employee_name}</p>
                         <p><strong>Start Date:</strong> {start_date}</p>
                         <p><strong>End Date:</strong> {end_date}</p>
+                        <p><strong>Total Days:</strong> {days_taken}</p>
+                        {"<p style='color: #e74c3c;'><strong>Unbillable Days:</strong> " + str(unbillable_days) + "</p>" if unbillable_days > 0 else ""}
                         <p><strong>Reason:</strong></p>
                         <p style="background-color: #f8f9fa; padding: 10px; border-left: 3px solid #3498db;">
                             {reason}
@@ -126,7 +128,7 @@ def send_email_notification(employee_name: str, start_date: str, end_date: str, 
         st.error(f"Failed to send email notification: {str(e)}")
         return False
 
-def send_status_update_email(employee_email: str, employee_name: str, start_date: str, end_date: str, status: str) -> bool:
+def send_status_update_email(employee_email: str, employee_name: str, start_date: str, end_date: str, status: str, unbillable_days: int = 0) -> bool:
     """
     Send email notification to employee when their vacation request is approved or rejected.
     """
@@ -157,6 +159,7 @@ def send_status_update_email(employee_email: str, employee_name: str, start_date
                         <p>Your vacation request for the following period has been <strong>{status.lower()}</strong>:</p>
                         <p style="background-color: #f8f9fa; padding: 10px; border-left: 3px solid {color};">
                             <strong>Dates:</strong> {start_date} to {end_date}
+                            {f"<br><strong>Unbillable Days:</strong> {unbillable_days}" if unbillable_days > 0 else ""}
                         </p>
                         <p>Please log in to the system to view your updated balance and history.</p>
                     </div>
@@ -212,6 +215,28 @@ def logout_user():
     """Clear session state to log out user."""
     for key in list(st.session_state.keys()):
         del st.session_state[key]
+
+def recalculate_pending_requests(supabase, user_id, current_balance):
+    """
+    Recalculate unbillable days for all pending requests of a user
+    when their allowance/balance is updated by an admin.
+    """
+    try:
+        # Fetch pending requests
+        response = supabase.table("requests").select("*").eq("user_id", user_id).eq("status", "Pending").order("created_at", desc=False).execute()
+        
+        if response and response.data:
+            for request in response.data:
+                days_taken = request['days_taken']
+                # Recalculate based on the balance at that moment
+                new_unbillable = max(0, days_taken - current_balance)
+                
+                # Update if changed
+                if new_unbillable != request.get('unbillable_days', 0):
+                    supabase.table("requests").update({"unbillable_days": new_unbillable}).eq("id", request['id']).execute()
+    except Exception as e:
+        # Silent error in UI but log to session
+        print(f"Error recalculating pending requests: {str(e)}")
 
 # ===========================
 # Employee Dashboard
@@ -278,11 +303,15 @@ def employee_dashboard():
                 # Calculate workdays
                 days_taken = calculate_workdays(start_date, end_date)
                 
-                if days_taken > balance:
-                    st.error(f"Insufficient balance! You requested {days_taken} days but only have {balance} days available.")
-                elif days_taken == 0:
+                # Calculate unbillable days
+                unbillable_days = max(0, days_taken - balance)
+                
+                if days_taken == 0:
                     st.error("The selected date range contains no working days. Please select dates that include at least one working day (Sunday-Thursday).")
                 else:
+                    if unbillable_days > 0:
+                        st.info(f"ℹ️ This request spans {days_taken} days, which exceeds your current balance of {balance} days. **{unbillable_days} days** will be marked as unbillable (unpaid).")
+                    
                     # Insert request
                     try:
                         insert_response = supabase.table("requests").insert({
@@ -290,21 +319,25 @@ def employee_dashboard():
                             "start_date": str(start_date),
                             "end_date": str(end_date),
                             "days_taken": days_taken,
+                            "unbillable_days": unbillable_days,
                             "status": "Pending",
                             "reason": reason
                         }).execute()
                         
                         if insert_response.data:
                             # Log vacation request submission
+                            unbillable_log = f" ({unbillable_days} unbillable)" if unbillable_days > 0 else ""
                             log_activity(supabase, user_id, username, "REQUEST_CREATE", 
-                                       f"Submitted vacation request: {start_date} to {end_date} ({days_taken} days)")
+                                       f"Submitted vacation request: {start_date} to {end_date} ({days_taken} days{unbillable_log})")
                             
                             # Send email notification
                             email_sent = send_email_notification(
                                 employee_name=username,
                                 start_date=str(start_date),
                                 end_date=str(end_date),
-                                reason=reason
+                                reason=reason,
+                                days_taken=days_taken,
+                                unbillable_days=unbillable_days
                             )
                             
                             if email_sent:
@@ -332,8 +365,12 @@ def employee_dashboard():
             
             # Format dataframe for display
             df['created_at'] = pd.to_datetime(df['created_at']).dt.strftime('%Y-%m-%d %H:%M')
-            display_df = df[['start_date', 'end_date', 'days_taken', 'status', 'reason', 'created_at']]
-            display_df.columns = ['Start Date', 'End Date', 'Days', 'Status', 'Reason', 'Submitted At']
+            # Handle potential missing unbillable_days in older records
+            if 'unbillable_days' not in df.columns:
+                df['unbillable_days'] = 0
+            
+            display_df = df[['start_date', 'end_date', 'days_taken', 'unbillable_days', 'status', 'reason', 'created_at']]
+            display_df.columns = ['Start Date', 'End Date', 'Days', 'Unbillable', 'Status', 'Reason', 'Submitted At']
             
             # Color code status
             def highlight_status(row):
@@ -377,7 +414,8 @@ def admin_dashboard():
                         
                         with col1:
                             st.markdown(f"**Employee:** {request['users']['username']}")
-                            st.markdown(f"**Dates:** {request['start_date']} to {request['end_date']} ({request['days_taken']} days)")
+                            unbillable_str = f" ({request.get('unbillable_days', 0)} unbillable)" if request.get('unbillable_days', 0) > 0 else ""
+                            st.markdown(f"**Dates:** {request['start_date']} to {request['end_date']} ({request['days_taken']} days{unbillable_str})")
                             st.markdown(f"**Reason:** {request['reason']}")
                             st.caption(f"Submitted: {pd.to_datetime(request['created_at']).strftime('%Y-%m-%d %H:%M')}")
                         
@@ -396,8 +434,10 @@ def admin_dashboard():
                                     
                                     # Log approval
                                     admin_user = st.session_state.user
+                                    unbillable_days_val = request.get('unbillable_days', 0)
+                                    unbillable_log = f" ({unbillable_days_val} unbillable)" if unbillable_days_val > 0 else ""
                                     log_activity(supabase, admin_user['id'], admin_user['username'], "REQUEST_APPROVE",
-                                               f"Approved {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']})")
+                                               f"Approved {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']}{unbillable_log})")
                                     
                                     # Send status update email to employee
                                     employee_email = request['users'].get('email')
@@ -407,7 +447,8 @@ def admin_dashboard():
                                             employee_name=request['users']['username'],
                                             start_date=request['start_date'],
                                             end_date=request['end_date'],
-                                            status="Approved"
+                                            status="Approved",
+                                            unbillable_days=request.get('unbillable_days', 0)
                                         )
                                     
                                     st.success(f"Request approved! Balance updated: {current_balance} → {new_balance} days")
@@ -423,8 +464,10 @@ def admin_dashboard():
                                     
                                     # Log rejection
                                     admin_user = st.session_state.user
+                                    unbillable_days_val = request.get('unbillable_days', 0)
+                                    unbillable_log = f" ({unbillable_days_val} unbillable)" if unbillable_days_val > 0 else ""
                                     log_activity(supabase, admin_user['id'], admin_user['username'], "REQUEST_REJECT",
-                                               f"Rejected {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']})")
+                                               f"Rejected {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']}{unbillable_log})")
                                     
                                     # Send status update email to employee
                                     employee_email = request['users'].get('email')
@@ -434,7 +477,8 @@ def admin_dashboard():
                                             employee_name=request['users']['username'],
                                             start_date=request['start_date'],
                                             end_date=request['end_date'],
-                                            status="Rejected"
+                                            status="Rejected",
+                                            unbillable_days=request.get('unbillable_days', 0)
                                         )
                                     
                                     st.success("Request rejected!")
@@ -586,7 +630,10 @@ def admin_dashboard():
                                                     log_activity(supabase, admin_user['id'], admin_user['username'], "USER_UPDATE",
                                                                f"Updated user {new_username} (role: {new_role}, allowance: {new_allowance}, password changed)")
                                                     
-                                                    st.success(f"✅ User '{new_username}' updated successfully (including password)!")
+                                                    # Recalculate pending requests
+                                                    recalculate_pending_requests(supabase, user_id=user['id'], current_balance=new_balance)
+                                                    
+                                                    st.success(f"✅ User '{new_username}' updated successfully (including password and pending requests)!")
                                                     st.rerun()
                                         else:
                                             # Update without password
@@ -609,7 +656,10 @@ def admin_dashboard():
                                                 log_activity(supabase, admin_user['id'], admin_user['username'], "USER_UPDATE",
                                                            f"Updated user {new_username} (role: {new_role}, allowance: {new_allowance})")
                                                 
-                                                st.success(f"✅ User '{new_username}' updated successfully!")
+                                                # Recalculate pending requests
+                                                recalculate_pending_requests(supabase, user_id=user['id'], current_balance=new_balance)
+                                                
+                                                st.success(f"✅ User '{new_username}' updated successfully (including pending requests)!")
                                                 st.rerun()
                                     
                                     except Exception as e:
