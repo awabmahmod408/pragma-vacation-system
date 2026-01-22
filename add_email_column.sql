@@ -5,7 +5,8 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS email TEXT;
 
 -- Update existing sample users with placeholder emails
 UPDATE users SET email = 'admin@example.com' WHERE username = 'admin';
-UPDATE users SET email = 'john.doe@example.com' WHERE username = 'john.doe';
+UPDATE users SET email = 'awabmahmod88@gmail.com' WHERE username = 'awab';
+UPDATE users SET email = 'mohand@example.com' WHERE username = 'mohand';
 UPDATE users SET email = 'jane.smith@example.com' WHERE username = 'jane.smith';
 UPDATE users SET email = 'bob.johnson@example.com' WHERE username = 'bob.johnson';
 

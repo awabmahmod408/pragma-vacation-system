@@ -66,28 +66,21 @@ def verify_password(password: str, hashed: str) -> bool:
 
 def send_email_notification(employee_name: str, start_date: str, end_date: str, reason: str) -> bool:
     """
-    Send email notification to admin when a new vacation request is submitted.
-    
-    Args:
-        employee_name: Name of the employee
-        start_date: Request start date
-        end_date: Request end date
-        reason: Reason for vacation
-    
-    Returns:
-        bool: True if email sent successfully, False otherwise
+    Send email notification to multiple admins when a new vacation request is submitted.
     """
     try:
         # Get email credentials from secrets
         sender_email = st.secrets["EMAIL_SENDER_ADDRESS"]
         sender_password = st.secrets["EMAIL_APP_PASSWORD"]
-        admin_email = "awabmahmod88@gmail.com"
+        
+        # List of admin emails to notify
+        admin_emails = ["awabmahmod88@gmail.com", "yaramahmood1890@gmail.com"]
         
         # Create message
         message = MIMEMultipart("alternative")
         message["Subject"] = f"New Vacation Request from {employee_name}"
         message["From"] = sender_email
-        message["To"] = admin_email
+        message["To"] = ", ".join(admin_emails)
         
         # Create HTML body
         html = f"""
@@ -124,7 +117,8 @@ def send_email_notification(employee_name: str, start_date: str, end_date: str, 
         # Send email using Gmail SMTP
         with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
             server.login(sender_email, sender_password)
-            server.sendmail(sender_email, admin_email, message.as_string())
+            # sendmail takes a list of recipients for the envelope
+            server.sendmail(sender_email, admin_emails, message.as_string())
         
         return True
     
