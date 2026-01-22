@@ -1,0 +1,16 @@
+# Employee Vacation Management System - Dependencies
+
+# Core web framework
+streamlit>=1.31.0
+
+# Database client (using postgrest instead of full supabase to avoid C++ compiler requirement)
+postgrest>=2.27.0
+
+# Password hashing
+bcrypt>=4.1.0
+
+# Data manipulation
+pandas>=2.2.0
+
+# Date utilities (usually included with Python, but listed for clarity)
+python-dateutil>=2.8.0
