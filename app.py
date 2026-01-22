@@ -132,6 +132,57 @@ def send_email_notification(employee_name: str, start_date: str, end_date: str, 
         st.error(f"Failed to send email notification: {str(e)}")
         return False
 
+def send_status_update_email(employee_email: str, employee_name: str, start_date: str, end_date: str, status: str) -> bool:
+    """
+    Send email notification to employee when their vacation request is approved or rejected.
+    """
+    if not employee_email:
+        return False
+        
+    try:
+        sender_email = st.secrets["EMAIL_SENDER_ADDRESS"]
+        sender_password = st.secrets["EMAIL_APP_PASSWORD"]
+        
+        message = MIMEMultipart("alternative")
+        message["Subject"] = f"Vacation Request {status}: {start_date} to {end_date}"
+        message["From"] = sender_email
+        message["To"] = employee_email
+        
+        color = "#27ae60" if status == "Approved" else "#e74c3c"
+        icon = "✅" if status == "Approved" else "❌"
+        
+        html = f"""
+        <html>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+                <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                    <h2 style="color: {color}; border-bottom: 2px solid {color}; padding-bottom: 10px;">
+                        {icon} Vacation Request {status}
+                    </h2>
+                    <div style="margin: 20px 0;">
+                        <p>Hello {employee_name},</p>
+                        <p>Your vacation request for the following period has been <strong>{status.lower()}</strong>:</p>
+                        <p style="background-color: #f8f9fa; padding: 10px; border-left: 3px solid {color};">
+                            <strong>Dates:</strong> {start_date} to {end_date}
+                        </p>
+                        <p>Please log in to the system to view your updated balance and history.</p>
+                    </div>
+                </div>
+            </body>
+        </html>
+        """
+        
+        part = MIMEText(html, "html")
+        message.attach(part)
+        
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(sender_email, sender_password)
+            server.sendmail(sender_email, employee_email, message.as_string())
+            
+        return True
+    except Exception as e:
+        st.error(f"Failed to send status update email: {str(e)}")
+        return False
+
 # ===========================
 # Authentication Functions
 # ===========================
@@ -323,7 +374,7 @@ def admin_dashboard():
         
         try:
             # Fetch pending requests with user info
-            requests_response = supabase.table("requests").select("*, users(username)").eq("status", "Pending").order("created_at", desc=False).execute()
+            requests_response = supabase.table("requests").select("*, users(username, email)").eq("status", "Pending").order("created_at", desc=False).execute()
             
             if requests_response.data:
                 for request in requests_response.data:
@@ -354,6 +405,17 @@ def admin_dashboard():
                                     log_activity(supabase, admin_user['id'], admin_user['username'], "REQUEST_APPROVE",
                                                f"Approved {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']})")
                                     
+                                    # Send status update email to employee
+                                    employee_email = request['users'].get('email')
+                                    if employee_email:
+                                        send_status_update_email(
+                                            employee_email=employee_email,
+                                            employee_name=request['users']['username'],
+                                            start_date=request['start_date'],
+                                            end_date=request['end_date'],
+                                            status="Approved"
+                                        )
+                                    
                                     st.success(f"Request approved! Balance updated: {current_balance} → {new_balance} days")
                                     st.rerun()
                                 
@@ -369,6 +431,17 @@ def admin_dashboard():
                                     admin_user = st.session_state.user
                                     log_activity(supabase, admin_user['id'], admin_user['username'], "REQUEST_REJECT",
                                                f"Rejected {request['users']['username']}'s request for {request['days_taken']} days ({request['start_date']} to {request['end_date']})")
+                                    
+                                    # Send status update email to employee
+                                    employee_email = request['users'].get('email')
+                                    if employee_email:
+                                        send_status_update_email(
+                                            employee_email=employee_email,
+                                            employee_name=request['users']['username'],
+                                            start_date=request['start_date'],
+                                            end_date=request['end_date'],
+                                            status="Rejected"
+                                        )
                                     
                                     st.success("Request rejected!")
                                     st.rerun()
@@ -432,6 +505,12 @@ def admin_dashboard():
                                         options=["employee", "admin"],
                                         index=0 if user['role'] == 'employee' else 1,
                                         key=f"role_{user['id']}"
+                                    )
+                                    
+                                    new_email = st.text_input(
+                                        "Email Address",
+                                        value=user.get('email', ''),
+                                        key=f"email_{user['id']}"
                                     )
                                 
                                 with col2:
@@ -501,6 +580,7 @@ def admin_dashboard():
                                                 else:
                                                     supabase.table("users").update({
                                                         "username": new_username,
+                                                        "email": new_email,
                                                         "password_hash": password_hash,
                                                         "role": new_role,
                                                         "total_allowance": new_allowance,
@@ -524,6 +604,7 @@ def admin_dashboard():
                                             else:
                                                 supabase.table("users").update({
                                                     "username": new_username,
+                                                    "email": new_email,
                                                     "role": new_role,
                                                     "total_allowance": new_allowance,
                                                     "balance": new_balance
@@ -582,6 +663,7 @@ def admin_dashboard():
                     )
                 
                 with col2:
+                    create_email = st.text_input("Email Address", placeholder="e.g., john.smith@example.com")
                     create_password = st.text_input("Password", type="password", placeholder="Minimum 6 characters")
                     create_confirm_password = st.text_input("Confirm Password", type="password")
                 
@@ -605,6 +687,7 @@ def admin_dashboard():
                             # Insert new user
                             insert_response = supabase.table("users").insert({
                                 "username": create_username,
+                                "email": create_email,
                                 "password_hash": password_hash,
                                 "role": create_role,
                                 "total_allowance": create_allowance,
