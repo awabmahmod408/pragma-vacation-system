@@ -20,10 +20,13 @@ st.set_page_config(
     layout="wide"
 )
 
-# Hide Streamlit header/toolbar
+# Hide Streamlit header/toolbar and specific element classes
 st.markdown("""
     <style>
     header {visibility: hidden;}
+    ._container_gzau3_1, ._viewerBadge_nim44_23, ._profileContainer_gzau3_53 {
+        display: none !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
