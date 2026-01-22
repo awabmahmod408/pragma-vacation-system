@@ -760,18 +760,8 @@ def main():
                         else:
                             st.error("Invalid username or password.")
             
-            st.markdown("---")
-            st.info("""
-            **Demo Credentials:**
-            
-            **Admin:**
-            - Username: `admin`
-            - Password: `admin123`
-            
-            **Employee:**
-            - Username: `john.doe`
-            - Password: `password123`
-            """)
+            # st.markdown("---")
+            # Removed demo credentials section
     
     # Authenticated user interface
     else:
