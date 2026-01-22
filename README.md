@@ -59,14 +59,6 @@ A production-ready vacation management system built with **Streamlit** and **Sup
    ```
 2. **Configure Secrets**
 
-   - Create `.streamlit/secrets.toml` with your credentials:
-
-   ```toml
-   SUPABASE_URL = "https://your-project.supabase.co"
-   SUPABASE_KEY = "your-anon-key"
-   EMAIL_SENDER_ADDRESS = "your-email@gmail.com"
-   EMAIL_APP_PASSWORD = "xxxx xxxx xxxx xxxx"
-   ```
 
 ### Step 3: Run the Application
 
